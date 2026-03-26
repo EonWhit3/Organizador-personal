@@ -590,11 +590,7 @@ body::before {
   </button>
 </nav>
 
-<!-- ═══════════════════════════════════════
-     SUPABASE SDK — URL UMD explícita + fallback esm.sh
-     FIX: el CDN sin ruta no exporta window.supabase correctamente
-═══════════════════════════════════════ -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
 <script>
 'use strict';
@@ -633,24 +629,12 @@ const NOTIF_SCHED = [
 // ── APP STATE ────────────────────────────────────────────────
 let estadoApp = { checked:{}, events:{}, metroNotes:[], weekKey:'' };
 
-// ── SUPABASE CLIENT ──────────────────────────────────────────
-let sbClient = null;
+// ── SUPABASE CLIENT (patrón oficial) ─────────────────────────
+const { createClient } = supabase;
+const _supabase = createClient(DEFAULT_SUPABASE_URL, DEFAULT_SUPABASE_KEY);
 
-/**
- * FIX PRINCIPAL: el CDN UMD expone la librería como window.supabase,
- * pero createClient puede estar en window.supabase.createClient
- * o en window.supabase.default.createClient según la versión.
- * Esta función prueba ambas rutas y lanza error claro si falla.
- */
-function getCreateClient() {
-  const lib = window.supabase;
-  if (!lib) throw new Error('Supabase SDK no cargado');
-  // UMD v2 estándar
-  if (typeof lib.createClient === 'function') return lib.createClient;
-  // Algunos builds lo anidan en .default
-  if (lib.default && typeof lib.default.createClient === 'function') return lib.default.createClient;
-  throw new Error('createClient no encontrado en window.supabase');
-}
+// sbClient apunta al mismo cliente para no romper el resto del código
+let sbClient = _supabase;
 
 function getCredentials() {
   return {
@@ -660,15 +644,15 @@ function getCredentials() {
 }
 
 function initSupabase() {
-  const {url, key} = getCredentials();
-  if (!url || !key) return false;
+  // Con el patrón oficial el cliente ya está creado arriba.
+  // Esta función recrea el cliente si el usuario cambia las credenciales.
   try {
-    const createClient = getCreateClient();
+    const {url, key} = getCredentials();
+    if (!url || !key) return false;
     sbClient = createClient(url, key);
     return true;
   } catch(e) {
     console.error('Supabase init error:', e);
-    sbClient = null;
     return false;
   }
 }
@@ -684,13 +668,13 @@ async function loadFromSupabase() {
   if (!sbClient) { setSyncStatus('err','Sin Supabase'); return false; }
   try {
     setSyncStatus('loading','Cargando…');
-    const {data, error} = await sbClient
+    const { data, error } = await sbClient
       .from('estado_app')
       .select('data')
       .eq('id', RECORD_ID)
       .maybeSingle();
     if (error) throw error;
-    if (data?.data) {
+    if (data && data.data) {
       const r = data.data;
       estadoApp.checked    = r.checked    || {};
       estadoApp.events     = r.events     || {};
@@ -702,6 +686,9 @@ async function loadFromSupabase() {
   } catch(e) {
     console.error('Supabase load error:', e);
     setSyncStatus('err','Error conexión');
+    // Fallback a localStorage
+    const local = localStorage.getItem('estadoApp');
+    if (local) { try { estadoApp = JSON.parse(local); } catch(_){} }
     return false;
   }
 }
@@ -710,9 +697,9 @@ async function saveToSupabase() {
   if (!sbClient) return;
   try {
     setSyncStatus('loading','Guardando…');
-    const {error} = await sbClient
+    const { error } = await sbClient
       .from('estado_app')
-      .upsert({id: RECORD_ID, data: estadoApp, updated_at: new Date().toISOString()});
+      .upsert({ id: RECORD_ID, data: estadoApp, updated_at: new Date().toISOString() });
     if (error) throw error;
     setSyncStatus('ok','Sincronizado');
   } catch(e) {
@@ -1201,7 +1188,7 @@ async function saveConfig() {
   const key=document.getElementById('cfgKey').value.trim();
   if(!url||!key){showToast('⚠ Rellena URL y Key','warn');return;}
   localStorage.setItem('sb_url',url); localStorage.setItem('sb_key',key);
-  sbClient=null; closeConfig(); showToast('🔄 Reconectando…');
+  closeConfig(); showToast('🔄 Reconectando…');
   if(initSupabase()){
     const ok=await loadFromSupabase();
     if(ok){checkWeeklyReset();renderAll();showToast('✅ Conectado a Supabase','ok');}
